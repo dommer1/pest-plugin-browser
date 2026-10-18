@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Pest\Browser\Filters;
 
 use Pest\Browser\Playwright\Playwright;
+use Pest\Browser\Playwright\Servers\PlaywrightNpmServer;
 use Pest\Browser\Plugin;
 use Pest\Browser\ServerManager;
 use Pest\Browser\Support\BrowserTestIdentifier;
@@ -58,10 +59,13 @@ final readonly class UsesBrowserTestCaseMethodFilter implements TestCaseMethodFi
         if (Parallel::isWorker() === false && Plugin::$booted === false) {
             Plugin::$booted = true;
 
-            // Parallel workers share one server, so the parent process has to start it for them. Without
-            // workers, the server starts on the first browser test that actually runs (see Browsable).
-            if (Parallel::isEnabled()) {
-                ServerManager::instance()->playwright()->start();
+            // Parallel workers share one server, so the parent process starts it for them, in the background:
+            // a worker waits for it on its first browser test. Without workers, the server starts on the
+            // first browser test that actually runs (see Browsable).
+            $playwright = ServerManager::instance()->playwright();
+
+            if (Parallel::isEnabled() && $playwright instanceof PlaywrightNpmServer) {
+                $playwright->startInBackground();
             }
 
             Screenshot::cleanup();

@@ -29,6 +29,11 @@ final class PlaywrightNpmServer implements PlaywrightServer
     private ?SystemProcess $systemProcess = null;
 
     /**
+     * Whether the process printed the "until" output, so it accepts connections.
+     */
+    private bool $listening = false;
+
+    /**
      * Creates a new playwright npm server instance.
      */
     private function __construct(
@@ -52,13 +57,65 @@ final class PlaywrightNpmServer implements PlaywrightServer
     }
 
     /**
+     * Ensures that Playwright is installed and the version is supported.
+     *
+     * @throws PlaywrightNotInstalledException
+     */
+    public static function ensurePlaywrightIsInstalledAndVersionIsSupported(string $baseDirectory): void
+    {
+        $process = SystemProcess::fromShellCommandline(
+            '.'.DIRECTORY_SEPARATOR.'node_modules'.DIRECTORY_SEPARATOR.'.bin'.DIRECTORY_SEPARATOR.'playwright run-server --version',
+            $baseDirectory,
+        );
+
+        $process->run();
+
+        if (! $process->isSuccessful()) {
+            throw new PlaywrightNotInstalledException();
+        }
+
+        $output = $process->getOutput();
+
+        // check if the output matches the required version
+        if (in_array(preg_match('/^Version\s+(\d+\.\d+\.\d+)/', $output, $matches), [0, false], true) || ! isset($matches[1])) {
+            throw new PlaywrightNotInstalledException();
+        }
+
+        $version = $matches[1];
+
+        if (version_compare($version, self::PLAYWRIGHT_VERSION, '<')) {
+            throw new PlaywrightOutdatedException();
+        }
+    }
+
+    /**
      * Starts the process until the given "output" condition is met.
      */
     public function start(): void
     {
+        $this->startInBackground();
+
+        while (! $this->listening) {
+            if (! $this->isRunning()) {
+                self::ensurePlaywrightIsInstalledAndVersionIsSupported($this->baseDirectory);
+
+                throw new PlaywrightNotInstalledException();
+            }
+
+            usleep(10_000);
+        }
+    }
+
+    /**
+     * Starts the process without waiting until it accepts connections.
+     */
+    public function startInBackground(): void
+    {
         if ($this->isRunning()) {
             return;
         }
+
+        $this->listening = false;
 
         $this->systemProcess = SystemProcess::fromShellCommandline(sprintf(
             $this->command,
@@ -70,17 +127,11 @@ final class PlaywrightNpmServer implements PlaywrightServer
 
         $this->systemProcess->setTimeout(0);
 
-        $this->systemProcess->start();
-
-        $this->systemProcess->waitUntil(
-            fn (string $type, string $output): bool => str_contains($output, $this->until)
-        );
-
-        if ($this->isRunning() === false) {
-            self::ensurePlaywrightIsInstalledAndVersionIsSupported();
-
-            throw new PlaywrightNotInstalledException();
-        }
+        $this->systemProcess->start(function (string $type, string $output): void {
+            if (str_contains($output, $this->until)) {
+                $this->listening = true;
+            }
+        });
 
         AlreadyStartedPlaywrightServer::persist(
             $this->host,
@@ -130,38 +181,6 @@ final class PlaywrightNpmServer implements PlaywrightServer
         }
 
         return sprintf('%s:%d', $this->host, $this->port);
-    }
-
-    /**
-     * Ensures that Playwright is installed and the version is supported.
-     *
-     * @throws PlaywrightNotInstalledException
-     */
-    private function ensurePlaywrightIsInstalledAndVersionIsSupported(): void
-    {
-        $process = SystemProcess::fromShellCommandline(
-            '.'.DIRECTORY_SEPARATOR.'node_modules'.DIRECTORY_SEPARATOR.'.bin'.DIRECTORY_SEPARATOR.'playwright run-server --version',
-            $this->baseDirectory,
-        );
-
-        $process->run();
-
-        if (! $process->isSuccessful()) {
-            throw new PlaywrightNotInstalledException();
-        }
-
-        $output = $process->getOutput();
-
-        // check if the output matches the required version
-        if (in_array(preg_match('/^Version\s+(\d+\.\d+\.\d+)/', $output, $matches), [0, false], true) || ! isset($matches[1])) {
-            throw new PlaywrightNotInstalledException();
-        }
-
-        $version = $matches[1];
-
-        if (version_compare($version, self::PLAYWRIGHT_VERSION, '<')) {
-            throw new PlaywrightOutdatedException();
-        }
     }
 
     /**

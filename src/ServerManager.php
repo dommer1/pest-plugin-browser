@@ -56,7 +56,7 @@ final class ServerManager
     public function playwright(): PlaywrightServer
     {
         if (Parallel::isWorker()) {
-            return AlreadyStartedPlaywrightServer::fromPersisted();
+            return $this->playwright ??= AlreadyStartedPlaywrightServer::fromPersisted();
         }
 
         $port = Port::find();

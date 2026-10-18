@@ -6,19 +6,41 @@ namespace Pest\Browser\Playwright\Servers;
 
 use JsonException;
 use Pest\Browser\Contracts\PlaywrightServer;
+use Pest\Browser\Support\PackageJsonDirectory;
 use RuntimeException;
+use Throwable;
 
 /**
  * @internal
  */
-final readonly class AlreadyStartedPlaywrightServer implements PlaywrightServer
+final class AlreadyStartedPlaywrightServer implements PlaywrightServer
 {
+    /**
+     * After how many seconds of waiting it is checked that Playwright is installed.
+     */
+    private const int INSTALLATION_CHECK_AFTER = 3;
+
+    /**
+     * How many seconds to wait for the server at most.
+     */
+    private const int TIMEOUT = 60;
+
+    /**
+     * Whether the server accepted a connection.
+     */
+    private bool $ready = false;
+
+    /**
+     * The reason the server is not available, once waiting for it failed.
+     */
+    private ?Throwable $failure = null;
+
     /**
      * Creates a new already started playwright server instance.
      */
     public function __construct(
-        public string $host,
-        public int $port,
+        public readonly string $host,
+        public readonly int $port,
     ) {
         //
     }
@@ -80,11 +102,25 @@ final readonly class AlreadyStartedPlaywrightServer implements PlaywrightServer
     }
 
     /**
-     * Starts the process until the given "output" condition is met.
+     * Waits until the server, started in the background by the parent process, accepts connections.
      */
     public function start(): void
     {
-        //
+        if ($this->ready) {
+            return;
+        }
+
+        if ($this->failure instanceof Throwable) {
+            throw $this->failure;
+        }
+
+        try {
+            $this->waitUntilAcceptingConnections();
+        } catch (Throwable $e) {
+            throw $this->failure = $e;
+        }
+
+        $this->ready = true;
     }
 
     /**
@@ -117,5 +153,50 @@ final readonly class AlreadyStartedPlaywrightServer implements PlaywrightServer
     private static function path(): string
     {
         return dirname(__DIR__, 3).'/.temp/playwright-server.json';
+    }
+
+    /**
+     * Waits until the server accepts connections, failing early when Playwright is not installed.
+     */
+    private function waitUntilAcceptingConnections(): void
+    {
+        $startedAt = microtime(true);
+        $installationChecked = false;
+
+        while (! $this->acceptsConnections()) {
+            $waited = microtime(true) - $startedAt;
+
+            if (! $installationChecked && $waited >= self::INSTALLATION_CHECK_AFTER) {
+                PlaywrightNpmServer::ensurePlaywrightIsInstalledAndVersionIsSupported(PackageJsonDirectory::find());
+
+                $installationChecked = true;
+            }
+
+            if ($waited >= self::TIMEOUT) {
+                throw new RuntimeException(sprintf(
+                    'The Playwright server at [%s] did not accept connections within %d seconds.',
+                    $this->url(),
+                    self::TIMEOUT,
+                ));
+            }
+
+            usleep(20_000);
+        }
+    }
+
+    /**
+     * Determines whether the server accepts connections.
+     */
+    private function acceptsConnections(): bool
+    {
+        $socket = @fsockopen($this->host, $this->port, $errorCode, $errorMessage, 1);
+
+        if ($socket === false) {
+            return false;
+        }
+
+        fclose($socket);
+
+        return true;
     }
 }
