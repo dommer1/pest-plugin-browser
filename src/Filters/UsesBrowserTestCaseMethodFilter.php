@@ -58,7 +58,12 @@ final readonly class UsesBrowserTestCaseMethodFilter implements TestCaseMethodFi
         if (Parallel::isWorker() === false && Plugin::$booted === false) {
             Plugin::$booted = true;
 
-            ServerManager::instance()->playwright()->start();
+            // Parallel workers share one server, so the parent process has to start it for them. Without
+            // workers, the server starts on the first browser test that actually runs (see Browsable).
+            if (Parallel::isEnabled()) {
+                ServerManager::instance()->playwright()->start();
+            }
+
             Screenshot::cleanup();
             Trace::cleanup();
         }

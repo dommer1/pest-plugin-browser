@@ -22,9 +22,11 @@ trait Browsable
      */
     public function __markAsBrowserTest(): void
     {
-        Client::instance()->connectTo(
-            ServerManager::instance()->playwright()->url(),
-        );
+        $playwright = ServerManager::instance()->playwright();
+
+        $playwright->start();
+
+        Client::instance()->connectTo($playwright->url());
 
         $http = ServerManager::instance()->http();
 
